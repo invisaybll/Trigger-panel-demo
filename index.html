@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Motion Target Lab</title>
+<style>
+:root{color-scheme:dark;--red:#ff304f;--bg:#0a0c11;--panel:#151923;--muted:#9aa4b5}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f4f6fb;font:16px system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:760px;margin:auto;padding:16px;display:grid;gap:14px}
+h1{font-size:23px;margin:0}p{margin:0;color:var(--muted);line-height:1.45}
+.card{background:var(--panel);border:1px solid #2a3040;border-radius:16px;padding:14px;display:grid;gap:12px}
+canvas{display:block;width:100%;height:auto;aspect-ratio:16/10;background:#080a0e;border:1px solid #2d3545;border-radius:12px;touch-action:manipulation}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}
+button{border:0;border-radius:10px;background:var(--red);color:white;padding:12px 14px;font-weight:700;font-size:15px}
+button.secondary{background:#303747}label{display:flex;justify-content:space-between;gap:10px;color:#dce2ee}input[type=range]{width:100%;accent-color:var(--red)}
+.statgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#0d1017;border-radius:10px;padding:10px}.stat strong{display:block;font-size:20px}.stat span{color:var(--muted);font-size:12px}
+#status{color:#f4f6fb;font-size:14px}
+small{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>🎯 Motion Target Lab</h1>
+    <p>Тест обнаружения движущихся мишеней в собственной сцене. Не взаимодействует со Standoff 2 и не управляет игровым вводом.</p>
+  </div>
+  <section class="card">
+    <canvas id="scene" width="640" height="400" aria-label="Тестовая сцена с движущимися мишенями"></canvas>
+    <div class="row">
+      <button id="toggle">▶ Запустить тест</button>
+      <button id="reset" class="secondary">↻ Сбросить</button>
+    </div>
+    <div id="status">Готово к запуску. Мишени движутся только после нажатия кнопки.</div>
+  </section>
+  <section class="card">
+    <div>
+      <label for="delay">Задержка реакции <strong><span id="delayVal">100</span> мс</strong></label>
+      <input id="delay" type="range" min="0" max="500" step="10" value="100">
+    </div>
+    <div>
+      <label for="speed">Скорость мишеней <strong><span id="speedVal">1.0</span>×</strong></label>
+      <input id="speed" type="range" min="0.5" max="2.5" step="0.1" value="1">
+    </div>
+    <div class="statgrid">
+      <div class="stat"><strong id="detected">0</strong><span>Обнаружено</span></div>
+      <div class="stat"><strong id="reacted">0</strong><span>Реакций</span></div>
+      <div class="stat"><strong id="latency">—</strong><span>Время реакции</span></div>
+    </div>
+    <small>Срабатывание означает подсветку мишени в этой демо-сцене, не выстрел в игре.</small>
+  </section>
+</main>
+<script>
+const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d');
+const toggle=document.getElementById('toggle'),reset=document.getElementById('reset');
+const delay=document.getElementById('delay'),speed=document.getElementById('speed');
+const delayVal=document.getElementById('delayVal'),speedVal=document.getElementById('speedVal');
+const detectedEl=document.getElementById('detected'),reactedEl=document.getElementById('reacted'),latencyEl=document.getElementById('latency'),statusEl=document.getElementById('status');
+let running=false,last=0,elapsed=0,detected=0,reacted=0,targets=[],pending=[],frame=0;
+function init(){targets=[{x:95,y:110,r:17,vx:100,vy:42,phase:0,marked:false},{x:330,y:225,r:21,vx:-74,vy:66,phase:0,marked:false},{x:520,y:110,r:15,vx:-90,vy:50,phase:0,marked:false}];pending=[];detected=0;reacted=0;elapsed=0;detectedEl.textContent=0;reactedEl.textContent=0;latencyEl.textContent='—';}
+function draw(){
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+ ctx.strokeStyle='#1d2431';ctx.lineWidth=1;
+ for(let x=0;x<canvas.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke()}
+ for(let y=0;y<canvas.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke()}
+ targets.forEach((t,i)=>{
+   ctx.beginPath();ctx.arc(t.x,t.y,t.r+7,0,Math.PI*2);ctx.strokeStyle=t.marked?'#ff304f':'#485469';ctx.lineWidth=2;ctx.stroke();
+   ctx.beginPath();ctx.arc(t.x,t.y,t.r,0,Math.PI*2);ctx.fillStyle=t.marked?'#ff304f':'#dbe5f5';ctx.fill();
+   ctx.beginPath();ctx.arc(t.x,t.y,t.r*.45,0,Math.PI*2);ctx.fillStyle='#10141c';ctx.fill();
+   ctx.fillStyle='#9aa4b5';ctx.font='12px system-ui';ctx.fillText('T'+(i+1),t.x-9,t.y+t.r+22);
+ });
+ if(!running){ctx.fillStyle='#aab4c5';ctx.font='16px system-ui';ctx.fillText('Нажми «Запустить тест»',18,28)}
+}
+function step(ts){
+ if(!running){draw();return}
+ if(!last)last=ts;const dt=Math.min((ts-last)/1000,.05);last=ts;elapsed+=dt*1000;
+ const s=Number(speed.value);
+ targets.forEach(t=>{
+   t.x+=t.vx*dt*s;t.y+=t.vy*dt*s;
+   if(t.x<t.r||t.x>canvas.width-t.r)t.vx*=-1;
+   if(t.y<t.r||t.y>canvas.height-t.r)t.vy*=-1;
+ });
+ // Demo detector: tracks the known targets in this sandbox and schedules a visible response.
+ targets.forEach((t,i)=>{
+   if(!t.marked&&!pending.some(p=>p.i===i)){
+     detected++;detectedEl.textContent=detected;
+     pending.push({i,at:performance.now()+Number(delay.value),created:performance.now()});
+   }
+ });
+ const now=performance.now();
+ pending=pending.filter(p=>{
+   if(now>=p.at){targets[p.i].marked=true;reacted++;reactedEl.textContent=reacted;latencyEl.textContent=Math.round(now-p.created)+' ms';setTimeout(()=>{if(targets[p.i])targets[p.i].marked=false},180);return false}
+   return true;
+ });
+ statusEl.textContent='Тест запущен · задержка '+delay.value+' мс · скорость '+Number(speed.value).toFixed(1)+'×';
+ draw();frame=requestAnimationFrame(step);
+}
+toggle.addEventListener('click',()=>{running=!running;toggle.textContent=running?'⏸ Остановить тест':'▶ Запустить тест';last=0;if(running){statusEl.textContent='Тест запущен';frame=requestAnimationFrame(step)}else{cancelAnimationFrame(frame);statusEl.textContent='Тест остановлен';draw()}});
+reset.addEventListener('click',()=>{running=false;cancelAnimationFrame(frame);toggle.textContent='▶ Запустить тест';last=0;init();statusEl.textContent='Сброшено. Можно запускать снова.';draw()});
+delay.addEventListener('input',()=>delayVal.textContent=delay.value);
+speed.addEventListener('input',()=>speedVal.textContent=Number(speed.value).toFixed(1));
+init();draw();
+</script>
+</body>
+  </html>
